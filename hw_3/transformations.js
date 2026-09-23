@@ -1,12 +1,3 @@
-// The perspective matrix is built as a product of three factors:
-//
-//     M_per = M_orth * P * F
-//
-//   M_orth: Normalization from box to cube [l,r][b,t][n,f] -> [-1,1]^3
-//   P: Perspective warping, from frustum to box
-//   F: z-axis flip.
-
-
 // Warpping the frustum into the box [l,r][b,t][n,f]
 //   [ n  0   0    0  ]
 //   [ 0  n   0    0  ]
@@ -103,6 +94,15 @@ function mat4Translate(matrix, translation) {
     return result;
 }
 
+function create3DShearMatrix(xy, xz, yx, yz, zx, zy) {
+    return new Float32Array([
+        1,  yx, zx, 0, 
+        xy, 1,  zy, 0, 
+        xz, yz, 1,  0, 
+        0,  0,  0,  1
+    ]);
+}
+
 // Matrix rotation around X axis
 function mat4RotateX(matrix, angle) {
     const c = Math.cos(angle);
@@ -145,16 +145,26 @@ function mat4RotateY(matrix, angle) {
     return result;
 }
 
+function mat4Scale(sx, sy, sz) {
+    return new Float32Array([
+        sx, 0,  0,  0,
+        0,  sy, 0,  0,
+        0,  0,  sz, 0,
+        0,  0,  0,  1
+    ]);
+}
 
-// [optional] Helper function converting math format row-major matrices into a flat column-major array.
-// function mat4FromRows(m00, m01, m02, m03,
-//                       m10, m11, m12, m13,
-//                       m20, m21, m22, m23,
-//                       m30, m31, m32, m33) {
-//     return new Float32Array([
-//         m00, m10, m20, m30,   // column 0
-//         m01, m11, m21, m31,   // column 1
-//         m02, m12, m22, m32,   // column 2
-//         m03, m13, m23, m33    // column 3
-//     ]);
-// }
+function getAnimatedModelMatrix(uTime) {
+    const pulseFactor = 1.0 + 0.2 * Math.sin(uTime * 2);
+    const scaleMatrix = mat4Scale(pulseFactor, pulseFactor, pulseFactor);
+
+    const shearFactor = 4* 0.4 * Math.cos(uTime);
+    const shearMatrix = create3DShearMatrix(shearFactor, 0, 0, 0, 0, 0);
+
+    let modelMatrix = matMul(mat4Identity(), scaleMatrix, shearMatrix);
+
+    const rotationSpeed = uTime * 0.7;
+    modelMatrix = mat4RotateY(modelMatrix, rotationSpeed);
+
+    return modelMatrix;
+}

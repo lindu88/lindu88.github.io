@@ -29,9 +29,9 @@
   <h2>Interactive Controls & Geometric Primitives</h2>
   <p>Edit vertex and fragment shaders on the left to get the result instantly.<br>
   Use mouse to drag and rotate the cube. <br>
-Use arrow keys and w, s keys to move the camera.<br>
-Save your code to source file if you want to save it.<br>
-Press F12 to see the console for debugging.</p>
+  Use arrow keys and w, s keys to move the camera.<br>
+  Save your code to source file if you want to save it.<br>
+  Press F12 to see the console for debugging.</p>
 
   <div style="display: flex; gap: 10px; align-items: flex-start;">
     <div style="display: flex; flex-direction: column; gap: 10px;">
@@ -43,6 +43,10 @@ Press F12 to see the console for debugging.</p>
         <b>Fragment Shader</b><br>
         <textarea id="fragEditor"></textarea>
       </div>
+      <div class="slidecontainer">
+        <input type="range" min="0" max="100" value="100" class="slider" id="res">
+      </div>
+      <button id="render_b">Render</button>
     </div>
     <div>
       <canvas id="glcanvas" width="400" height="400"></canvas>
@@ -116,26 +120,66 @@ void main() {
     fragEditor.value = document.getElementById("fragment-shader").textContent;
 
     let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM;
-    let vbo, nbo, ibo;
+    
+    // Scene objects array to store primitive meshes and their associated GPU buffers
+    let sceneObjects = [];
 
-    // Buffers
+    // Initialize or refresh primitives and GPU buffers
     function initBuffers() {
-      vbo = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+      const slider = document.getElementById("res");
+      const res = parseInt(slider.value) || 8;
 
-      nbo = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
-      gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
+      // Build array of raw primitive geometries from primitives.js
+      let primitivesList = [];
 
-      ibo = gl.createBuffer();
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+      // Add Cube if defined globally in primitives.js
+      if (typeof positions !== 'undefined' && typeof colors !== 'undefined' && typeof indices !== 'undefined') {
+        primitivesList.push({
+          positions: positions,
+          colors: colors,
+          indices: indices
+        });
+      }
+
+      // Add Sphere and Cylinder primitives
+      primitivesList.push(sphere(1, res, res, 1, 1, 1));
+      primitivesList.push(cyl(1, res, 8, res, -1, -1, -1));
+
+      // Synchronize sceneObjects list with updated buffers
+      for (let i = 0; i < primitivesList.length; i++) {
+        let prim = primitivesList[i];
+
+        // Reuse existing container object or create a new one
+        if (!sceneObjects[i]) {
+          sceneObjects[i] = {
+            vbo: gl.createBuffer(),
+            nbo: gl.createBuffer(),
+            ibo: gl.createBuffer(),
+            indexCount: 0
+          };
+        }
+
+        let obj = sceneObjects[i];
+        obj.indexCount = prim.indices.length;
+
+        // Position Buffer
+        gl.bindBuffer(gl.ARRAY_BUFFER, obj.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, prim.positions, gl.STATIC_DRAW);
+
+        // Color Buffer
+        gl.bindBuffer(gl.ARRAY_BUFFER, obj.nbo);
+        gl.bufferData(gl.ARRAY_BUFFER, prim.colors, gl.STATIC_DRAW);
+
+        // Index Buffer
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, obj.ibo);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, prim.indices, gl.STATIC_DRAW);
+      }
     }
-    initBuffers();
 
     function initShaderProgram() {
       try {
-        program = createProgram(gl, vertEditor.value, fragEditor.value);
+        let newProgram = createProgram(gl, vertEditor.value, fragEditor.value);
+        program = newProgram;
         gl.useProgram(program);
         posLoc = gl.getAttribLocation(program, "aPosition");
         colorLoc = gl.getAttribLocation(program, "aColor");
@@ -145,7 +189,7 @@ void main() {
         uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
       } catch (e) { console.error(e); }
     }
-    initShaderProgram();
+
     vertEditor.onkeyup = initShaderProgram;
     fragEditor.onkeyup = initShaderProgram;
 
@@ -176,19 +220,15 @@ void main() {
       }
     });
 
-
     // Projection setup
     let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
-
     let orthoSize = 2.5;
 
-    // Perspective and Orthographic projection
     let projPerspective = perspective(fov, aspect, zNear, zFar);
-
     let projOrtho = matMul(
-    box2Cube(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, zNear, zFar),
-    flipZ()
-);
+      box2Cube(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, zNear, zFar),
+      flipZ()
+    );
     let proj = projOrtho;
 
     let startTime = Date.now();
@@ -198,49 +238,69 @@ void main() {
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-      // rotation matrices
+      if (!program) {
+        requestAnimationFrame(render);
+        return;
+      }
+
+      // Rotation matrices
       let cx = Math.cos(cubeRotY), sx = Math.sin(cubeRotY);
       let cy = Math.cos(cubeRotX), sy = Math.sin(cubeRotX);
       let rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
       let rotY = [cx, 0, -sx, 0, 0, 1, 0, 0, sx, 0, cx, 0, 0, 0, 0, 1];
       let cubeRotation = multiplyMat4(rotY, rotX);
 
-      // init model-view matrix as identity matrix
       let modelViewMatrix = mat4Identity();
-      // init model transformation matrix as identity matrix
       let modelTransformationMatrix = mat4Identity();
 
-      //delta time in ms
       let deltaTime = Date.now() - startTime;
-      // object rotation
+
       modelTransformationMatrix = multiplyMat4(modelTransformationMatrix, cubeRotation);
-      // camera translation
       modelViewMatrix = mat4Translate(modelViewMatrix, [camX, camY, camZ]);
-      
-      //set time in seconds
-      gl.uniform1f(timeLoc, deltaTime/1000.0);
+      modelTransformationMatrix = multiplyMat4(modelTransformationMatrix, getAnimatedModelMatrix(deltaTime/1000))
+
+      gl.uniform1f(timeLoc, deltaTime / 1000.0);
       gl.uniformMatrix4fv(uPM, false, proj);
       gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
       gl.uniformMatrix4fv(uMTM, false, modelTransformationMatrix);
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-      gl.enableVertexAttribArray(posLoc);
-      gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+      // Render loop iterating through sceneObjects list
+      for (let i = 0; i < sceneObjects.length; i++) {
+        let obj = sceneObjects[i];
 
-      gl.bindBuffer(gl.ARRAY_BUFFER, nbo);
-      gl.enableVertexAttribArray(colorLoc);
-      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+        // Bind positions
+        gl.bindBuffer(gl.ARRAY_BUFFER, obj.vbo);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
 
-      // draw the object by the index order
-      gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_SHORT, 0);
+        // Bind colors
+        gl.bindBuffer(gl.ARRAY_BUFFER, obj.nbo);
+        gl.enableVertexAttribArray(colorLoc);
+        gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+        // Bind elements and draw
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, obj.ibo);
+        gl.drawElements(gl.TRIANGLES, obj.indexCount, gl.UNSIGNED_SHORT, 0);
+      }
+
+      requestAnimationFrame(render);
     }
 
-    // Initialize when page loads
+    // Unified initialization pipeline on load
     window.onload = function () {
-      setInterval(render, 30);
-    }
+      initShaderProgram();
+      initBuffers();
 
+      const button = document.getElementById('render_b');
+      if (button) {
+        button.addEventListener('click', () => {
+          initShaderProgram();
+          initBuffers();
+        });
+      }
+
+      requestAnimationFrame(render);
+    };
   </script>
 </body>
 
