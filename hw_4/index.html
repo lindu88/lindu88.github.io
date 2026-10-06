@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>UNM CS 412/512 HW3</title>
+  <style>
+    body {
+      background: #111;
+      color: #ccc;
+      font-family: monospace;
+    }
+
+    textarea {
+      background: #222;
+      color: #0f0;
+      font: 14px monospace;
+      width: 400px;
+      height: 250px;
+    }
+
+    canvas {
+      border: 1px solid #444;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Interactive Controls & Hierarchical Modeling</h2>
+  <p>Edit vertex and fragment shaders on the left to get the result instantly.<br>
+  Use mouse to drag and rotate the model. <br>
+  Use arrow keys and w, s keys to move the camera.<br>
+  Save your code to source file if you want to save it.<br>
+  Press F12 to see the console for debugging.</p>
+
+  <div style="display: flex; gap: 10px; align-items: flex-start;">
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div>
+        <b>Vertex Shader</b><br>
+        <textarea id="vertEditor"></textarea>
+      </div>
+      <div>
+        <b>Fragment Shader</b><br>
+        <textarea id="fragEditor"></textarea>
+      </div>
+      <div class="slidecontainer">
+        <input type="range" min="0" max="100" value="100" class="slider" id="res">
+      </div>
+      <button id="render_b">Render</button>
+    </div>
+    <div>
+      <canvas id="glcanvas" width="400" height="400"></canvas>
+    </div>
+  </div>
+
+  <!-- Vertex shader -->
+  <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+in vec3 aPosition;
+in vec3 aColor;
+
+uniform float uTime; //time in sec
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform mat4 uModelTransformationMatrix;
+
+out vec3 vColor;
+
+void main() {
+  gl_Position = uProjectionMatrix * uModelViewMatrix * uModelTransformationMatrix * vec4(aPosition,1.0);
+  vColor = aColor;
+}
+</script>
+  <!-- Fragment Shader -->
+  <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
+precision mediump float;
+in vec3 vColor;
+
+out vec4 fragColor;
+
+void main() {
+  fragColor = vec4(vColor,1.0);
+}
+</script>
+
+  <script src="primitives.js"></script>
+  <script src="transformations.js"></script>
+
+  <script>
+    function createShader(gl, type, source) {
+      let shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    }
+
+    function createProgram(gl, vsSource, fsSource) {
+      let vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
+      let fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+      let prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+      }
+      return prog;
+    }
+
+    // WebGL setup
+    const canvas = document.getElementById("glcanvas");
+    const gl = canvas.getContext("webgl2");
+    if (!gl) alert("WebGL2 not supported");
+
+    let vertEditor = document.getElementById("vertEditor");
+    let fragEditor = document.getElementById("fragEditor");
+    vertEditor.value = document.getElementById("vertex-shader").textContent;
+    fragEditor.value = document.getElementById("fragment-shader").textContent;
+
+    let program, posLoc, colorLoc, timeLoc, uMVM, uPM, uMTM;
+
+    // GPU meshes created from primitives.js
+    // 0 = cube, 1 = sphere, 2 = cylinder
+    let sceneObjects = [];
+
+    // Root of the hierarchical model
+    let sceneRoot = null;
+
+    let modelNodes = {};
+
+    function createNode(name, meshIndex = null) {
+      return {
+        name: name,
+        meshIndex: meshIndex,
+        localMatrix: mat4Identity(),
+        children: []
+      };
+    }
+
+    function addChild(parent, child) {
+      parent.children.push(child);
+      return child;
+    }
+
+    function buildHierarchy() {
+      sceneRoot = createNode("root");
+
+      modelNodes.body = addChild(sceneRoot, createNode("body", 0));
+      modelNodes.head = addChild(modelNodes.body, createNode("head", 1));
+      modelNodes.arm = addChild(modelNodes.body, createNode("arm", 2));
+      modelNodes.hand = addChild(modelNodes.arm, createNode("hand", 1));
+
+      updateHierarchy(0);
+    }
+    // updates whole hierarhy
+    function updateHierarchy(time) {
+      let armSwing = 0.65 * Math.sin(time * 2.0);
+      let handTurn = 0.8 * Math.sin(time * 3.0);
+      let headBob = 0.15 * Math.sin(time * 2.0);
+      let body_move = 0.3 * Math.sin(time * 2.0);
+
+
+      modelNodes.body.localMatrix = mat4Translate(mat4Identity(), [0, body_move, 0]);
+
+      modelNodes.head.localMatrix = mat4Translate(mat4Identity(), [0, 1.6 + headBob, 0]);
+
+      modelNodes.arm.localMatrix = mat4Translate(mat4Identity(), [1.0, 0.5, 0]);
+      modelNodes.arm.localMatrix = mat4RotateY(modelNodes.arm.localMatrix, Math.PI / 2 + armSwing);
+
+      modelNodes.hand.localMatrix = mat4Translate(mat4Identity(), [0, 0, 1.5]);
+      modelNodes.hand.localMatrix = mat4RotateY(modelNodes.hand.localMatrix, handTurn);
+      modelNodes.hand.localMatrix = multiplyMat4(modelNodes.hand.localMatrix, mat4Scale(0.6, 0.6, 0.6));
+    }
+
+    // Draw one GPU mesh.
+    function drawMesh(meshIndex) {
+      let obj = sceneObjects[meshIndex];
+      if (!obj) return;
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, obj.vbo);
+      gl.enableVertexAttribArray(posLoc);
+      gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, obj.nbo);
+      gl.enableVertexAttribArray(colorLoc);
+      gl.vertexAttribPointer(colorLoc, 3, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, obj.ibo);
+      gl.drawElements(gl.TRIANGLES, obj.indexCount, gl.UNSIGNED_SHORT, 0);
+    }
+
+    // Recursively combine parent * local transforms.
+    // Children automatically inherit every transform applied to the parent.
+    function drawNode(node, parentMatrix) {
+      let worldMatrix = multiplyMat4(parentMatrix, node.localMatrix);
+
+      if (node.meshIndex !== null) {
+        gl.uniformMatrix4fv(uMTM, false, worldMatrix);
+        drawMesh(node.meshIndex);
+      }
+
+      for (let child of node.children) {
+        drawNode(child, worldMatrix);
+      }
+    }
+
+    function initBuffers() {
+      const slider = document.getElementById("res");
+      const res = parseInt(slider.value) || 8;
+
+      // Build raw primitive geometries from primitives.js.
+      // Keep the generated meshes centered at their local origins so the
+      // hierarchy controls where each part goes.
+      let primitivesList = [];
+
+      if (typeof positions !== 'undefined' && typeof colors !== 'undefined' && typeof indices !== 'undefined') {
+        primitivesList.push({
+          positions: positions,
+          colors: colors,
+          indices: indices
+        });
+      }
+
+      primitivesList.push(sphere(0.55, res, res, 0, 0, 0));
+      primitivesList.push(cyl(0.25, res, 1.5, res, 0, 0, 0));
+
+      for (let i = 0; i < primitivesList.length; i++) {
+        let prim = primitivesList[i];
+
+        if (!sceneObjects[i]) {
+          sceneObjects[i] = {
+            vbo: gl.createBuffer(),
+            nbo: gl.createBuffer(),
+            ibo: gl.createBuffer(),
+            indexCount: 0
+          };
+        }
+
+        let obj = sceneObjects[i];
+        obj.indexCount = prim.indices.length;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, obj.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, prim.positions, gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, obj.nbo);
+        gl.bufferData(gl.ARRAY_BUFFER, prim.colors, gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, obj.ibo);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, prim.indices, gl.STATIC_DRAW);
+      }
+    }
+
+    function initShaderProgram() {
+      try {
+        let newProgram = createProgram(gl, vertEditor.value, fragEditor.value);
+        program = newProgram;
+        gl.useProgram(program);
+        posLoc = gl.getAttribLocation(program, "aPosition");
+        colorLoc = gl.getAttribLocation(program, "aColor");
+        timeLoc = gl.getUniformLocation(program, "uTime");
+        uMVM = gl.getUniformLocation(program, "uModelViewMatrix");
+        uPM = gl.getUniformLocation(program, "uProjectionMatrix");
+        uMTM = gl.getUniformLocation(program, "uModelTransformationMatrix");
+      } catch (e) { console.error(e); }
+    }
+
+    vertEditor.onkeyup = initShaderProgram;
+    fragEditor.onkeyup = initShaderProgram;
+
+    // Mouse and keyboard interactions
+    let mouseDown = false, lastX, lastY, cubeRotX = 0, cubeRotY = 0;
+    let camX = 0, camY = 0, camZ = -6;
+
+    canvas.addEventListener('mousedown', e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
+    canvas.addEventListener('mouseup', () => mouseDown = false);
+    canvas.addEventListener('mousemove', e => {
+      if (!mouseDown) return;
+      let dx = e.clientX - lastX;
+      let dy = e.clientY - lastY;
+      cubeRotY += dx * 0.01;
+      cubeRotX += dy * 0.01;
+      lastX = e.clientX; lastY = e.clientY;
+    });
+
+    document.addEventListener('keydown', e => {
+      const step = 0.2;
+      switch (e.key) {
+        case 'ArrowUp': camY -= step; break;
+        case 'ArrowDown': camY += step; break;
+        case 'ArrowLeft': camX += step; break;
+        case 'ArrowRight': camX -= step; break;
+        case 'w': camZ += step; break;
+        case 's': camZ -= step; break;
+      }
+    });
+
+    // Projection setup
+    let fov = Math.PI / 4, aspect = canvas.width / canvas.height, zNear = 0.1, zFar = 100;
+    let orthoSize = 2.5;
+
+    let projPerspective = perspective(fov, aspect, zNear, zFar);
+    let projOrtho = matMul(
+      box2Cube(-orthoSize * aspect, orthoSize * aspect, -orthoSize, orthoSize, zNear, zFar),
+      flipZ()
+    );
+    let proj = projOrtho;
+
+    let startTime = Date.now();
+
+    function render() {
+      gl.enable(gl.DEPTH_TEST);
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      if (!program || !sceneRoot) {
+        requestAnimationFrame(render);
+        return;
+      }
+
+      // Global model rotation from the mouse.
+      let cx = Math.cos(cubeRotY), sx = Math.sin(cubeRotY);
+      let cy = Math.cos(cubeRotX), sy = Math.sin(cubeRotX);
+      let rotX = [1, 0, 0, 0, 0, cy, sy, 0, 0, -sy, cy, 0, 0, 0, 0, 1];
+      let rotY = [cx, 0, -sx, 0, 0, 1, 0, 0, sx, 0, cx, 0, 0, 0, 0, 1];
+      let modelRotation = multiplyMat4(rotY, rotX);
+
+      let modelViewMatrix = mat4Identity();
+      let deltaTime = Date.now() - startTime;
+      let time = deltaTime / 1000.0;
+
+      updateHierarchy(time);
+
+      modelViewMatrix = mat4Translate(modelViewMatrix, [camX, camY, camZ]);
+      let rootMatrix = multiplyMat4(modelRotation, getAnimatedModelMatrix(1.0));
+
+      gl.uniform1f(timeLoc, time);
+      gl.uniformMatrix4fv(uPM, false, proj);
+      gl.uniformMatrix4fv(uMVM, false, modelViewMatrix);
+
+      // One recursive call replaces the old flat sceneObjects draw loop.
+      drawNode(sceneRoot, rootMatrix);
+
+      requestAnimationFrame(render);
+    }
+
+    // Unified initialization pipeline on load
+    window.onload = function () {
+      initShaderProgram();
+      initBuffers();
+      buildHierarchy();
+
+      const button = document.getElementById('render_b');
+      if (button) {
+        button.addEventListener('click', () => {
+          initShaderProgram();
+          initBuffers();
+        });
+      }
+
+      requestAnimationFrame(render);
+    };
+  </script>
+</body>
+
+</html>
