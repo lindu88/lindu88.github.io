@@ -46,6 +46,12 @@
       <div class="slidecontainer">
         <input type="range" min="0" max="100" value="100" class="slider" id="res">
       </div>
+      <div class="slidecontainer">
+        <input type="range" min="0" max="500" value="50" class="slider" id="speed">
+      </div>
+      <div class="slidecontainer">
+        <input type="range" min="0" max="10" value="0" class="slider" id="rotate">
+      </div>
       <button id="render_b">Render</button>
     </div>
     <div>
@@ -156,13 +162,21 @@ void main() {
     }
     // updates whole hierarhy
     function updateHierarchy(time) {
-      let armSwing = 0.65 * Math.sin(time * 2.0);
+      const slider_spd = document.getElementById("speed");
+      const spd = parseInt(slider_spd.value) || 50;
+
+      const slider_rt = document.getElementById("rotate");
+      const rt = parseInt(slider_rt.value) || 0;
+
+      let armSwing = 0.65 * Math.sin(time * (2.0 + (spd * 0.1)));
       let handTurn = 0.8 * Math.sin(time * 3.0);
       let headBob = 0.15 * Math.sin(time * 2.0);
       let body_move = 0.3 * Math.sin(time * 2.0);
 
 
       modelNodes.body.localMatrix = mat4Translate(mat4Identity(), [0, body_move, 0]);
+      modelNodes.body.localMatrix = mat4RotateY(modelNodes.body.localMatrix, (rt*1.0));
+
 
       modelNodes.head.localMatrix = mat4Translate(mat4Identity(), [0, 1.6 + headBob, 0]);
 
