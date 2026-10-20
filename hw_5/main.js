@@ -22,26 +22,38 @@ precision mediump float;
 in vec3 vPosition;
 in vec3 vNormal;
 
+uniform vec3 l2c;
+
 uniform vec3 uLightPos;   // eye space
+uniform vec3 uLightPos2;
 uniform vec3 uColor;
 
 out vec4 fragColor;
 
 void main() {
   vec3 Ka = 0.2 * uColor;
-  vec3 Kd = 0.8 * uColor;
-  vec3 Ks = vec3(0.5);
-  float shininess = 32.0;
+  vec3 Kd = 0.4 * uColor;
+  vec3 Ks = vec3(0.25);
+
+  vec3 Kd2 = 0.4 * l2c;
+  vec3 Ks2 = l2c;
+
+  float shininess = 16.0;
 
   vec3 N = normalize(vNormal);
   vec3 L = normalize(uLightPos - vPosition);
+  vec3 L2 = normalize(uLightPos2 - vPosition);
   vec3 V = normalize(-vPosition);           // camera sits at the origin
   vec3 R = reflect(-L, N);
+  vec3 R2 = reflect(-L2, N);
 
   float diff = max(dot(N, L), 0.0);
   float spec = pow(max(dot(V, R), 0.0), shininess);
 
-  fragColor = vec4(Ka + Kd * diff + Ks * spec, 1.0);
+  float diff2 = max(dot(N, L2), 0.0);
+  float spec2 = pow(max(dot(V, R2), 0.0), shininess);
+
+  fragColor = vec4(Ka + (Kd * diff) + (Kd2 * diff2) + (Ks * spec) + (Ks2 * spec2), 1.0);
 }
 `;
 
@@ -77,7 +89,8 @@ const shaderError = document.getElementById("shaderError");
 vertEditor.value = VERTEX_SHADER;
 fragEditor.value = FRAGMENT_SHADER;
 
-let program, uModelView, uProjection, uLightPos, uColor;
+let program, uModelView, uProjection, uLightPos, uLightPos2, uColor, l2c;
+
 
 function updateProgram() {
   try {
@@ -88,7 +101,13 @@ function updateProgram() {
     uModelView = gl.getUniformLocation(program, "uModelView");
     uProjection = gl.getUniformLocation(program, "uProjection");
     uLightPos = gl.getUniformLocation(program, "uLightPos");
+    uLightPos2 = gl.getUniformLocation(program, "uLightPos2");
     uColor = gl.getUniformLocation(program, "uColor");
+
+    l2c = gl.getUniformLocation(program, "l2c");
+
+
+
     shaderError.textContent = "";
   } catch (e) {
     shaderError.textContent = e.message.replace(/\0/g, "");  // some drivers end the log with \0
@@ -122,12 +141,17 @@ gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
 const projection = perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
 const lightWorld = [3, 4, 5];
+const lightworld2 = [-12,0,0];
 
 // nteractive controls
 let dragRotX = 0, dragRotY = -0.5;      // mouse drag
 let camX = 0, camY = 0, camZ = -7;      // arrow keys, w, s
 let sliderAngle = 0;                    // degrees
 let spinning = false, spinAngle = 0;    // Start/Stop button
+
+let r = 0.0;
+let g = 0.0;
+let b = 0.0;
 
 let mouseDown = false, lastX, lastY;
 canvas.addEventListener("mousedown", e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
@@ -160,6 +184,21 @@ document.getElementById("slider").addEventListener("input", e => {
   document.getElementById("sliderValue").textContent = sliderAngle;
 });
 document.getElementById("spinButton").addEventListener("click", () => spinning = !spinning);
+
+// red for light
+document.getElementById("r").addEventListener("input", e => {
+  r = Number(e.target.value)/100;
+});
+
+// green for light
+document.getElementById("g").addEventListener("input", e => {
+  g = Number(e.target.value)/100;
+});
+
+// blue for light
+document.getElementById("b").addEventListener("input", e => {
+  b = Number(e.target.value)/100;
+});
 
 
 function createNode(mesh, color, shape) {
@@ -206,6 +245,9 @@ function render(time) {
   const view = translate(camX, camY, camZ);
   gl.uniformMatrix4fv(uProjection, false, projection);
   gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
+  gl.uniform3fv(uLightPos2, transformPoint(view, lightworld2));
+  gl.uniform3fv(l2c, new Float32Array([r, g, b]));
+
 
   // Whole-model rotation
   const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
