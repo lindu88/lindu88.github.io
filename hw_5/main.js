@@ -136,12 +136,13 @@ function createMesh({ positions, normals, indices }) {
 
 const cubeMesh = createMesh(createCube());
 const cylinderMesh = createMesh(createCylinder(32));
+const cylinderMesh2 = createMesh(createCylinder(3));
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
 const projection = perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 100);
-const lightWorld = [3, 4, 5];
-const lightworld2 = [-12,0,0];
+const lightWorld = [3, 3, 5];
+const lightworld2 = [-4,0,0];
 
 // nteractive controls
 let dragRotX = 0, dragRotY = -0.5;      // mouse drag
@@ -213,7 +214,16 @@ const lowerArm = createNode(cylinderMesh, [1, 0.2, 0.2],
 const upperArm = createNode(cubeMesh, [0.2, 0.4, 1],
   multiply(translate(0, 0.5, 0), scale(0.2, 0.5, 0.2)));
 
+const hand = createNode(cubeMesh, [0.2, 0.4, 1],
+  multiply(translate(0, 0.7, 0), scale(1.0, 0.8, 0.2)));
+
+const tumor = createNode(cylinderMesh2, [0.2, 3, 1],
+  multiply(translate(0, 0.2, 0), scale(0.5, 1, 0.5)));
+
+
 lowerArm.children.push(upperArm);
+hand.children.push(lowerArm);
+tumor.children.push(hand);
 
 function drawNode(node, frame) {
   gl.uniformMatrix4fv(uModelView, false, multiply(frame, node.shape));
@@ -232,6 +242,13 @@ function drawTree(root, rootFrame) {
     for (const child of node.children) stack.push([child, frame]);
   }
 }
+
+
+let s = 0;
+// scale all (chaned to rot speed)
+document.getElementById("s").addEventListener("input", e => {
+s = Number(e.target.value)/100;
+});
 
 // Render loop
 let lastTime = 0;
@@ -257,9 +274,16 @@ function render(time) {
   lowerArm.joint = multiply(multiply(translate(0, -2, 0), rotation), rotateZ(0.5 * Math.sin(t)));
 
   // Upper arm (child)
-  upperArm.joint = multiply(translate(0, 1.2, 0), rotateZ(Math.sin(1.5 * t)));
+  upperArm.joint = multiply(translate(0, 1.2, 0), rotateZ(Math.sin(1.5 * t * s)));
 
-  drawTree(lowerArm, view);
+  // Lower arm (root)
+  hand.joint = multiply(multiply(translate(0, -2, 0), rotation), rotateZ(0.5 * Math.sin(t)));
+
+  // Upper arm (child)
+  tumor.joint = multiply(translate(0, 1.2, 0), rotateZ(Math.sin(1.5 * t * s)));
+
+
+  drawTree(tumor, view);
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
