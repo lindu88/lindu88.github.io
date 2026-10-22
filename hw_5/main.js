@@ -135,6 +135,7 @@ function createMesh({ positions, normals, indices }) {
 }
 
 const cubeMesh = createMesh(createCube());
+const smoothCubeMesh = createMesh(createSmoothCube());
 const cylinderMesh = createMesh(createCylinder(32));
 const cylinderMesh2 = createMesh(createCylinder(3));
 
@@ -214,16 +215,25 @@ const lowerArm = createNode(cylinderMesh, [1, 0.2, 0.2],
 const upperArm = createNode(cubeMesh, [0.2, 0.4, 1],
   multiply(translate(0, 0.5, 0), scale(0.2, 0.5, 0.2)));
 
-const hand = createNode(cubeMesh, [0.2, 0.4, 1],
+const hand = createNode(cubeMesh, [0.5, 0.4, 1],
   multiply(translate(0, 0.7, 0), scale(1.0, 0.8, 0.2)));
 
 const tumor = createNode(cylinderMesh2, [0.2, 3, 1],
   multiply(translate(0, 0.2, 0), scale(0.5, 1, 0.5)));
 
+const cube = createNode(cubeMesh, [0.2, 0.4, 1],
+multiply(translate(0, 0.5, 0), scale(1.0, 1.0, 1.0)));
+
+const smoothCube = createNode(smoothCubeMesh, [0.2, 0.4, 1],
+multiply(translate(-3.0, 1.0, 0), scale(1.0, 1.0, 1.0)));
+
+
 
 lowerArm.children.push(upperArm);
 hand.children.push(lowerArm);
 tumor.children.push(hand);
+cube.children.push(tumor);
+smoothCube.children.push(cube);
 
 function drawNode(node, frame) {
   gl.uniformMatrix4fv(uModelView, false, multiply(frame, node.shape));
@@ -282,8 +292,14 @@ function render(time) {
   // Upper arm (child)
   tumor.joint = multiply(translate(0, 1.2, 0), rotateZ(Math.sin(1.5 * t * s)));
 
+  // Lower arm (root)
+  cube.joint = multiply(multiply(translate(0, -1, 0), rotation), rotateZ(0.5 * Math.sin(t)));
 
-  drawTree(tumor, view);
+  // Upper arm (child)
+  smoothCube.joint = multiply(multiply(translate(0, -1, 0), rotation), rotateZ(0.5 * Math.sin(t)));
+
+
+  drawTree(smoothCube, view);
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);

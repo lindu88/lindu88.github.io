@@ -21,6 +21,52 @@ function createCube() {
   return { positions, normals, indices };
 }
 
+//smooth normals
+function createSmoothCube() {
+  const positions = new Float32Array([
+    -1, -1,  1,   1, -1,  1,   1,  1,  1,  -1,  1,  1,   // front
+     1, -1, -1,  -1, -1, -1,  -1,  1, -1,   1,  1, -1,   // back
+    -1,  1,  1,   1,  1,  1,   1,  1, -1,  -1,  1, -1,   // top
+    -1, -1, -1,   1, -1, -1,   1, -1,  1,  -1, -1,  1,   // bottom
+     1, -1,  1,   1, -1, -1,   1,  1, -1,   1,  1,  1,   // right
+    -1, -1, -1,  -1, -1,  1,  -1,  1,  1,  -1,  1, -1    // left
+  ]);
+
+  const s = 1.0 / Math.sqrt(3);
+
+  const v0 = [-s, -s, -s];
+  const v1 = [ s, -s, -s];
+  const v2 = [ s,  s, -s];
+  const v3 = [-s,  s, -s];
+  const v4 = [-s, -s,  s];
+  const v5 = [ s, -s,  s];
+  const v6 = [ s,  s,  s];
+  const v7 = [-s,  s,  s];
+
+  const normalGroups = [
+    [v4, v5, v6, v7],
+    [v1, v0, v3, v2],
+    [v7, v6, v2, v3],
+    [v0, v1, v5, v4],
+    [v5, v1, v2, v6],
+    [v0, v4, v7, v3]
+  ];
+
+  const normals = new Float32Array(normalGroups.flatMap(face => face.flatMap(n => n)));
+
+  const indices = new Uint16Array([
+     0,  1,  2,   0,  2,  3,
+     4,  5,  6,   4,  6,  7,
+     8,  9, 10,   8, 10, 11,
+    12, 13, 14,  12, 14, 15,
+    16, 17, 18,  16, 18, 19,
+    20, 21, 22,  20, 22, 23
+  ]);
+
+  return { positions, normals, indices };
+}
+
+
 function createCylinder(segments) {
   const pos = [], nrm = [], idx = [];
 
