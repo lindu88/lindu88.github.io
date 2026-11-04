@@ -124,20 +124,55 @@ function createMesh({ positions, normals, texCoords, indices }) {
 }
 
 const cubeMesh = createMesh(createCube());
+const coneMesh = createMesh(createCone());
+const cylinderMesh = createMesh(createCylinder());
+const sphereMesh = createMesh(createSphere());
 
-const texture = gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D, texture);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
+const videoTextures = [];
 
-const image = new Image();
-image.onload = () => {
+function createTexture(src) {
+  const texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);  // images start at the top row, texture coordinates at the bottom
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-  gl.generateMipmap(gl.TEXTURE_2D);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-};
-image.src = "brick.png";
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  // Video texture
+  if (/\.(mp4|webm|ogv)(\?.*)?$/i.test(src)) {
+    const video = document.createElement("video");
+    video.src = src;
+    video.loop = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.autoplay = true;
+    video.play().catch(e => console.error("Video playback failed:", e));
+
+    videoTextures.push({ texture, video });
+  }
+
+  // Image texture
+  else {
+    const image = new Image();
+    image.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    };
+    image.onerror = () => console.error("Failed to load:", src);
+    image.src = src;
+  }
+
+  return texture;
+}
+
+
+//creating textures
+const cubeTex = createTexture("brick.png");
+const coneTex = createTexture("water.webm");
+const cylinderTex = createTexture("water.webm");
+const sphereTex = createTexture("fire.webm");
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
@@ -191,7 +226,7 @@ function render(time) {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   // Camera moves with the keys; the light stays fixed in the world.
-  const view = translate(camX, camY, camZ);
+  const view = translate(camX, camY, camZ-7.0);
   gl.uniformMatrix4fv(uProjection, false, projection);
   gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
 
@@ -199,9 +234,42 @@ function render(time) {
   const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
-  gl.uniformMatrix4fv(uModelView, false, multiply(view, rotation));
+  gl.uniformMatrix4fv(uModelView, false, multiply(translate(0, 0, -5), multiply(view, rotation)));
+
+  gl.activeTexture(gl.TEXTURE0);
+
+  for (const { texture, video } of videoTextures) {
+    if (video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    }
+  }
+
+  // Cube
+  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(-5, 0, 0), rotation)));
+  gl.bindTexture(gl.TEXTURE_2D, cubeTex);
   gl.bindVertexArray(cubeMesh.vao);
   gl.drawElements(gl.TRIANGLES, cubeMesh.count, gl.UNSIGNED_SHORT, 0);
+
+  // Cone
+  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(-2, 0, 0), rotation)));
+  gl.bindTexture(gl.TEXTURE_2D, coneTex);
+  gl.bindVertexArray(coneMesh.vao);
+  gl.drawElements(gl.TRIANGLES, coneMesh.count, gl.UNSIGNED_SHORT, 0);
+
+  // Cylinder
+  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(2, 0, 0), rotation)));
+  gl.bindTexture(gl.TEXTURE_2D, cylinderTex);
+  gl.bindVertexArray(cylinderMesh.vao);
+  gl.drawElements(gl.TRIANGLES, cylinderMesh.count, gl.UNSIGNED_SHORT, 0);
+
+  // Sphere
+  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(5, 0, 0), rotation)));
+  gl.bindTexture(gl.TEXTURE_2D, sphereTex);
+  gl.bindVertexArray(sphereMesh.vao);
+  gl.drawElements(gl.TRIANGLES, sphereMesh.count, gl.UNSIGNED_SHORT, 0);
+
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
