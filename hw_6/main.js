@@ -1,3 +1,4 @@
+
 const VERTEX_SHADER = `#version 300 es
 in vec3 aPosition;
 in vec3 aNormal;
@@ -13,7 +14,6 @@ out vec2 vTexCoord;
 void main() {
   vec4 p = uModelView * vec4(aPosition, 1.0);
   vPosition = p.xyz;
-  // Inverse transpose for potential non-uniform scalings
   mat3 mv = mat3(uModelView);
   vNormal = transpose(inverse(mv)) * aNormal;
   vTexCoord = aTexCoord;
@@ -22,7 +22,7 @@ void main() {
 `;
 
 const FRAGMENT_SHADER = `#version 300 es
-precision mediump float;
+precision highp float;
 
 in vec3 vPosition;
 in vec3 vNormal;
@@ -30,6 +30,9 @@ in vec2 vTexCoord;
 
 uniform vec3 uLightPos;
 uniform sampler2D uTexture;
+uniform sampler2D uNormalMap;
+uniform sampler2D uBumpMap;      
+uniform float uBumpStrength;
 
 out vec4 fragColor;
 
@@ -41,13 +44,44 @@ void main() {
   float shininess = 32.0;
 
   vec3 N = normalize(vNormal);
+
+  // Existing normal mapping
+  vec3 dp1 = dFdx(vPosition);
+  vec3 dp2 = dFdy(vPosition);
+  vec2 duv1 = dFdx(vTexCoord);
+  vec2 duv2 = dFdy(vTexCoord);
+  float det = duv1.x * duv2.y - duv1.y * duv2.x;
+
+  if (abs(det) > 0.000001) {
+    vec3 T = (dp1 * duv2.y - dp2 * duv1.y) / det;
+    T = normalize(T - N * dot(N, T));
+    vec3 B = cross(N, T) * sign(det);
+    mat3 TBN = mat3(T, B, N);
+
+    vec3 mappedNormal = texture(uNormalMap, vTexCoord).rgb;
+    mappedNormal = normalize(mappedNormal * 2.0 - 1.0);
+
+    if (uBumpStrength > 0.0) {
+      vec2 pixel = 1.0 / vec2(textureSize(uBumpMap, 0));
+
+      float left  = texture(uBumpMap, vTexCoord - vec2(pixel.x, 0.0)).r;
+      float right = texture(uBumpMap, vTexCoord + vec2(pixel.x, 0.0)).r;
+      float down  = texture(uBumpMap, vTexCoord - vec2(0.0, pixel.y)).r;
+      float up    = texture(uBumpMap, vTexCoord + vec2(0.0, pixel.y)).r;
+
+      mappedNormal.xy -= uBumpStrength * vec2(right - left, up - down);
+      mappedNormal = normalize(mappedNormal);
+    }
+
+    N = normalize(TBN * mappedNormal);
+  }
+
   vec3 L = normalize(uLightPos - vPosition);
   vec3 V = normalize(-vPosition);
   vec3 R = reflect(-L, N);
 
   float diff = max(dot(N, L), 0.0);
   float spec = pow(max(dot(V, R), 0.0), shininess);
-
   fragColor = vec4(Ka + Kd * diff + Ks * spec, 1.0);
 }
 `;
@@ -64,7 +98,6 @@ function compile(type, source) {
   return shader;
 }
 
-// Fixed attribute slots, so the meshes stay valid when the shaders are recompiled
 const ATTRIBUTES = { aPosition: 0, aNormal: 1, aTexCoord: 2 };
 
 function createProgram(vsSource, fsSource) {
@@ -84,21 +117,26 @@ const shaderError = document.getElementById("shaderError");
 vertEditor.value = VERTEX_SHADER;
 fragEditor.value = FRAGMENT_SHADER;
 
-let program, uModelView, uProjection, uLightPos;
+let program, uModelView, uProjection, uLightPos, uBumpStrength;
 
 function updateProgram() {
   try {
     const prog = createProgram(vertEditor.value, fragEditor.value);
-    gl.deleteProgram(program);
+    if (program) gl.deleteProgram(program);
     program = prog;
     gl.useProgram(program);
     uModelView = gl.getUniformLocation(program, "uModelView");
     uProjection = gl.getUniformLocation(program, "uProjection");
     uLightPos = gl.getUniformLocation(program, "uLightPos");
-    gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);  // texture unit 0
+    uBumpStrength = gl.getUniformLocation(program, "uBumpStrength");
+
+    gl.uniform1i(gl.getUniformLocation(program, "uTexture"), 0);
+    gl.uniform1i(gl.getUniformLocation(program, "uNormalMap"), 1);
+    gl.uniform1i(gl.getUniformLocation(program, "uBumpMap"), 2); // NEW
+
     shaderError.textContent = "";
   } catch (e) {
-    shaderError.textContent = e.message.replace(/\0/g, "");  // some drivers end the log with \0
+    shaderError.textContent = e.message.replace(/\0/g, "");
   }
 }
 updateProgram();
@@ -130,14 +168,18 @@ const sphereMesh = createMesh(createSphere());
 
 const videoTextures = [];
 
-function createTexture(src) {
+function createTexture(src, isNormalMap = false) {
   const texture = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 255]));
+
+  const fallback = isNormalMap ? [128, 128, 255, 255] : [128, 128, 128, 255];
+
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0,
+    gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(fallback));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-  // Video texture
   if (/\.(mp4|webm|ogv)(\?.*)?$/i.test(src)) {
     const video = document.createElement("video");
     video.src = src;
@@ -146,14 +188,11 @@ function createTexture(src) {
     video.playsInline = true;
     video.autoplay = true;
     video.play().catch(e => console.error("Video playback failed:", e));
-
     videoTextures.push({ texture, video });
-  }
-
-  // Image texture
-  else {
+  } else {
     const image = new Image();
     image.onload = () => {
+      gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
@@ -163,16 +202,37 @@ function createTexture(src) {
     image.onerror = () => console.error("Failed to load:", src);
     image.src = src;
   }
-
   return texture;
 }
 
-
-//creating textures
+// Creating textures
 const cubeTex = createTexture("brick.png");
 const coneTex = createTexture("water.webm");
 const cylinderTex = createTexture("water.webm");
 const sphereTex = createTexture("fire.webm");
+
+// Normal map for cube
+const cubeNormalTex = createTexture("brick_normal.png", true);
+
+// Flat normal for other meshes
+const flatNormalTex = gl.createTexture();
+gl.activeTexture(gl.TEXTURE1);
+gl.bindTexture(gl.TEXTURE_2D, flatNormalTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0,
+  gl.RGBA, gl.UNSIGNED_BYTE,
+  new Uint8Array([128, 128, 255, 255]));
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+// NEW: Animated bump map for cone
+const coneBumpTex = createTexture("water_bump.webm");
+
+function bindTextures(diffuseTex, normalTex) {
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, diffuseTex);
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, normalTex);
+}
 
 gl.enable(gl.DEPTH_TEST);
 gl.clearColor(0, 0, 0, 1);
@@ -180,10 +240,10 @@ const projection = perspective(Math.PI / 4, canvas.width / canvas.height, 0.1, 1
 const lightWorld = [3, 4, 5];
 
 // Interactive controls
-let dragRotX = 0, dragRotY = -0.5;      // mouse drag
-let camX = 0, camY = 0, camZ = -7;      // arrow keys, w, s
-let sliderAngle = 0;                    // degrees
-let spinning = false, spinAngle = 0;    // Start/Stop button
+let dragRotX = 0, dragRotY = -0.5;
+let camX = 0, camY = 0, camZ = -7;
+let sliderAngle = 0;
+let spinning = false, spinAngle = 0;
 
 let mouseDown = false, lastX, lastY;
 canvas.addEventListener("mousedown", e => { mouseDown = true; lastX = e.clientX; lastY = e.clientY; });
@@ -225,19 +285,18 @@ function render(time) {
   lastTime = t;
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  // Camera moves with the keys; the light stays fixed in the world.
-  const view = translate(camX, camY, camZ-7.0);
+  if (!program) { requestAnimationFrame(render); return; }
+  gl.useProgram(program);
+
+  const view = translate(camX, camY, camZ - 7.0);
   gl.uniformMatrix4fv(uProjection, false, projection);
   gl.uniform3fv(uLightPos, transformPoint(view, lightWorld));
 
-  // Cube rotation
   const axisRotation = ROTATE[axisSelect.value](sliderAngle * Math.PI / 180 + spinAngle);
   const rotation = multiply(multiply(rotateY(dragRotY), rotateX(dragRotX)), axisRotation);
 
-  gl.uniformMatrix4fv(uModelView, false, multiply(translate(0, 0, -5), multiply(view, rotation)));
-
+  // Update all video textures, including the bump map
   gl.activeTexture(gl.TEXTURE0);
-
   for (const { texture, video } of videoTextures) {
     if (video.readyState >= video.HAVE_CURRENT_DATA && video.videoWidth > 0) {
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -246,27 +305,39 @@ function render(time) {
     }
   }
 
+  // NEW: Bind animated bump map to texture unit 2
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, coneBumpTex);
+
   // Cube
-  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(-5, 0, 0), rotation)));
-  gl.bindTexture(gl.TEXTURE_2D, cubeTex);
+  gl.uniformMatrix4fv(uModelView, false,
+    multiply(view, multiply(translate(-5, 0, 0), rotation)));
+  bindTextures(cubeTex, cubeNormalTex);
+  gl.uniform1f(uBumpStrength, 0.0);
   gl.bindVertexArray(cubeMesh.vao);
   gl.drawElements(gl.TRIANGLES, cubeMesh.count, gl.UNSIGNED_SHORT, 0);
 
   // Cone
-  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(-2, 0, 0), rotation)));
-  gl.bindTexture(gl.TEXTURE_2D, coneTex);
+  gl.uniformMatrix4fv(uModelView, false,
+    multiply(view, multiply(translate(-2, 0, 0), rotation)));
+  bindTextures(coneTex, flatNormalTex);
+  gl.uniform1f(uBumpStrength, 3.0);
   gl.bindVertexArray(coneMesh.vao);
   gl.drawElements(gl.TRIANGLES, coneMesh.count, gl.UNSIGNED_SHORT, 0);
 
   // Cylinder
-  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(2, 0, 0), rotation)));
-  gl.bindTexture(gl.TEXTURE_2D, cylinderTex);
+  gl.uniformMatrix4fv(uModelView, false,
+    multiply(view, multiply(translate(2, 0, 0), rotation)));
+  bindTextures(cylinderTex, flatNormalTex);
+  gl.uniform1f(uBumpStrength, 0.0);
   gl.bindVertexArray(cylinderMesh.vao);
   gl.drawElements(gl.TRIANGLES, cylinderMesh.count, gl.UNSIGNED_SHORT, 0);
 
   // Sphere
-  gl.uniformMatrix4fv(uModelView, false, multiply(view, multiply(translate(5, 0, 0), rotation)));
-  gl.bindTexture(gl.TEXTURE_2D, sphereTex);
+  gl.uniformMatrix4fv(uModelView, false,
+    multiply(view, multiply(translate(5, 0, 0), rotation)));
+  bindTextures(sphereTex, flatNormalTex);
+  gl.uniform1f(uBumpStrength, 0.0);
   gl.bindVertexArray(sphereMesh.vao);
   gl.drawElements(gl.TRIANGLES, sphereMesh.count, gl.UNSIGNED_SHORT, 0);
 
