@@ -44,7 +44,7 @@
       <pre id="shaderError"></pre>
     </div>
 
-    <div>
+        <div>
       <canvas id="glcanvas" width="640" height="400"></canvas>
 
       <div class="controls">
@@ -56,7 +56,17 @@
         <div class="control-row">
           <label for="ambient">Ambient Strength:</label>
           <input type="range" id="ambient" min="0" max="1" step="0.05" value="0.05">
-          <span id="ambientValue">0.5</span>
+          <span id="ambientValue">0.05</span>
+        </div>
+        <div class="control-row">
+          <label for="attenuation">Attenuation:</label>
+          <input type="range" id="attenuation" min="0" max="0.5" step="0.01" value="0.1">
+          <span id="attenuationValue">0.1</span>
+        </div>
+        <div class="control-row">
+          <label for="shininess">Shininess:</label>
+          <input type="range" id="shininess" min="2" max="128" step="2" value="32">
+          <span id="shininessValue">32</span>
         </div>
       </div>
     </div>
@@ -75,6 +85,8 @@ precision highp float;
 uniform float u_time;
 uniform vec2 u_resolution;
 uniform int u_maxBounces;
+uniform float u_atten;
+uniform float u_shiny;
 uniform float u_ambientStrength; //Ambient fill light for better visual
 uniform vec2 u_cameraOrbit;
 
@@ -114,7 +126,10 @@ struct HitData {
     bool isGlass;
 };
 
-const Sphere lightSphere = Sphere(vec3(4.0, 3.0, -4.0), 0.3, vec3(1.0, 1.0, 0.9));
+const Sphere lights[2] = Sphere[2](
+    Sphere(vec3(2.0, 4.0, 2.0), 0.5, vec3(1.0, 0.95, 0.8)),
+    Sphere(vec3(-3.0, 3.0, 1.0), 0.5, vec3(1.0, 0.0, 0.0))
+);
 Sphere sphere;
 Sphere glassSphere;
 Cube cube;
@@ -159,16 +174,6 @@ bool intersectCube(Ray ray, out float t, out vec3 normal) {
     return true;
 }
 
-//eta = n1 / n2
-//vec3 refraction(vec3 I, vec3 N, float eta) {
-//    <!-- insert your code here -->
-//}
-
-// Schlick approximation
-//float schlick(float cosine, float ref_idx) {
-//    <!-- insert your code here -->
-//}
-
 bool intersectFloor(Ray ray, out float t) {
     if (abs(ray.direction.y) < 0.0001) return false;
     t = (FLOOR_Y - ray.origin.y) / ray.direction.y;
@@ -182,8 +187,12 @@ HitData traceScene(Ray ray, bool includeLight) {
     float t;
     vec3 n;
 
-    if (includeLight && intersectSphere(ray, lightSphere, t) && t < hit.t) {
-        hit = HitData(true, t, ray.origin + ray.direction * t, vec3(0.0), lightSphere.color, 0.0, true, false);
+    if (includeLight) {
+        for (int i = 0; i < 2; i++) {
+            if (intersectSphere(ray, lights[i], t) && t < hit.t) {
+                hit = HitData(true, t, ray.origin + ray.direction * t, vec3(0.0), lights[i].color, 0.0, true, false);
+            }
+        }
     }
 
     if (intersectFloor(ray, t) && t < hit.t) {
@@ -194,7 +203,7 @@ HitData traceScene(Ray ray, bool includeLight) {
     }
 
     if (intersectCube(ray, t, n) && t < hit.t) {
-        hit = HitData(true, t, ray.origin + ray.direction * t, n, cube.color, cube.reflectivity, false, false);
+        hit = HitData(true, t, ray.origin + ray.direction * t, n, cube.color, cube.reflectivity, false, true);
     }
 
     if (intersectSphere(ray, sphere, t) && t < hit.t) {
@@ -220,51 +229,76 @@ vec3 trace(Ray ray) {
         }
 
         if (hit.isLight) {
-            color += attenuation * lightSphere.color * LIGHT_POWER;
+            color += attenuation * hit.color * LIGHT_POWER;
             break;
         }
 
-        // Refraction: (option 1)either reflects or refracts the ray, whichever Schlick says is stronger
-        // (option 2): finalColor = hit.color * (F * reflectionColor + (1.0 - F) * refractionColor)
-        // (option 3): Monte Carlo Sampling (multiple rays per pixel), reflect with probability F (random() < schlick_value), else refract, and average many samples per pixel
-        //<!-- if (hit.isGlass) {
-        //    <!-- insert your code here -->
+        if (hit.isGlass) {
 
-        //    vec3 direction;
-        //    if (total_internal_reflection || schlick_value > 0.5) {
-                //direction = reflection ray
-        //        <!-- insert your code here -->
-        //    } else {
-                //direction = refraction ray
-        //        <!-- insert your code here -->
-        //    }
+          float r_in = GLASS_IOR;
+          float r_out = 1.5;
 
-        //    ray = Ray(hit.point + direction * 0.001, direction);
-        ////Use Schlick approximation to determine contributions from reflection and refraction
-        //    attenuation *= hit.color;
-        //    continue;
-        //}
+          vec3 n = normalize(hit.normal);
+          vec3 d = normalize(ray.direction);
 
-        vec3 toLight = lightSphere.center - hit.point;
-        float lightDist = length(toLight);
-        vec3 lightDir = toLight / lightDist;
+          if (dot(n, d) <= 0.0) {
+            r_out = 1.0 / r_in;
+          }
+          else {
+            n = -n;
+            r_out = r_in;
+          }
 
-        HitData blocker = traceScene(Ray(hit.point + hit.normal * 0.001, lightDir), false);
-        float visible = blocker.hit && blocker.t < lightDist ? 0.0 : 1.0;
-        float diff = max(dot(hit.normal, lightDir), 0.0);
-        float falloff = 1.0 / (1.0 + 0.1 * lightDist * lightDist);
+          float cos_theta = min(dot(-d, n), 1.0);
+          float sin_theta = sqrt(max(0.0, 1.0 - cos_theta * cos_theta));
 
-        //  (optional) Ambient fill light approximates indirect light we don't trace.
-        vec3 shading = hit.color * (LIGHT_POWER * diff * falloff * visible + u_ambientStrength);
+          float r0 = (1.0 - r_out) / (1.0 + r_out);
+          r0 = r0 * r0;
+          float schlick_value = r0 + (1.0 - r0) * pow(1.0 - cos_theta, 5.0);
+          bool total_internal_reflection = (r_out * sin_theta) > 1.0;
+
+          vec3 direction;
+          if (total_internal_reflection || schlick_value > 0.5) {
+            direction = reflect(d, n);     
+          } 
+          else {
+            direction = refract(d, n, r_out);
+          }
+
+          ray = Ray(hit.point + direction * 0.001, direction);
+          attenuation *= hit.color;
+          continue;
+        }
+
+        vec3 directLight = vec3(0.0);
+        vec3 viewDir = normalize(-ray.direction);
+
+        for (int i = 0; i < 2; i++) {
+            vec3 toLight = lights[i].center - hit.point;
+            float lightDist = length(toLight);
+            vec3 lightDir = toLight / lightDist;
+
+            HitData blocker = traceScene(Ray(hit.point + hit.normal * 0.001, lightDir), false);
+            float visible = blocker.hit && blocker.t < lightDist ? 0.0 : 1.0;
+            float diff = max(dot(hit.normal, lightDir), 0.0);
+            float falloff = 1.0 / (1.0 + u_atten * lightDist * lightDist);
+
+            vec3 halfDir = normalize(lightDir + viewDir);
+            float spec = pow(max(dot(hit.normal, halfDir), 0.0), u_shiny);
+
+            directLight += lights[i].color * LIGHT_POWER * (diff + spec) * falloff * visible;
+        }
+
+        vec3 shading = hit.color * (directLight + u_ambientStrength);
         color += attenuation * shading * (1.0 - hit.reflectivity);
 
         if (hit.reflectivity == 0.0) break;
         attenuation *= hit.reflectivity;
         ray = Ray(hit.point + hit.normal * 0.001, reflect(ray.direction, hit.normal));
     }
-
     return color;
 }
+
 
 void main() {
     initScene(u_time);
@@ -276,7 +310,7 @@ void main() {
     mat3 rotY = mat3(cy, 0.0, -sy,  0.0, 1.0, 0.0,  sy, 0.0, cy);
     mat3 camera = rotY * rotX;
 
-    vec3 target = vec3(0.0, 0.0, -5.0);
+    vec3 target = vec3(0.0, 0.0, -10.0);
     vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution) / u_resolution.y;
     Ray ray = Ray(target + camera * vec3(0.0, 0.0, 7.0), camera * normalize(vec3(uv, -1.5)));
 
@@ -336,7 +370,9 @@ void main() {
 
   const bounces = document.getElementById("bounces");
   const ambient = document.getElementById("ambient");
-  for (const slider of [bounces, ambient]) {
+  const atten = document.getElementById("attenuation");
+  const shiny = document.getElementById("shininess");
+  for (const slider of [bounces, ambient, atten, shiny]) {
     slider.addEventListener("input", () => document.getElementById(slider.id + "Value").textContent = slider.value);
   }
 
@@ -358,6 +394,8 @@ void main() {
     gl.uniform2f(uniform("u_resolution"), canvas.width, canvas.height);
     gl.uniform1i(uniform("u_maxBounces"), bounces.value);
     gl.uniform1f(uniform("u_ambientStrength"), ambient.value);
+    gl.uniform1f(uniform("u_atten"), atten.value);
+    gl.uniform1f(uniform("u_shiny"), shiny.value);
     gl.uniform2f(uniform("u_cameraOrbit"), pitch, yaw);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
